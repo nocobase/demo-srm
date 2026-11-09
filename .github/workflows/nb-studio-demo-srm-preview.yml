@@ -1,0 +1,61 @@
+# Managed by NocoBase Studio (https://studio.v2.test.nocobase.com/main): deploys demo-srm on every pull request: reports unchanged paths or builds and deploys the head to the pull request's own App in preview.
+# Store the repository's CI key (Studio: the project's Deployment, or nb-studio build ci setup <owner/repo> --reveal) as the repository secret NB_STUDIO_API_KEY.
+name: NocoBase Studio demo-srm preview
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+env:
+  NB_STUDIO_URL: 'https://studio.v2.test.nocobase.com/main'
+jobs:
+  deploy:
+    name: Deploy demo-srm to preview
+    runs-on: ubuntu-latest
+    concurrency:
+      group: nb-studio-demo-srm-preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    env:
+      APP_ID: 'demo-srm-pr-${{ github.event.pull_request.number }}'
+      ENVIRONMENT: 'preview'
+      LOGS: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      NB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install the nb-studio CLI
+        env:
+          NB_STUDIO_API_KEY: ${{ secrets.NB_STUDIO_API_KEY }}
+        run: |
+          NB_STUDIO_CLI_ENV="$(curl -fsS -H "x-api-key: $NB_STUDIO_API_KEY" "$NB_STUDIO_URL/api/agents/dist/products/nb-studio/targets/linux-x64?format=env")"
+          eval "$NB_STUDIO_CLI_ENV"
+          mkdir -p "$RUNNER_TEMP/nb-studio"
+          curl -fsS -H "x-api-key: $NB_STUDIO_API_KEY" "$NB_STUDIO_URL$url" | tar -xz --strip-components=1 -C "$RUNNER_TEMP/nb-studio"
+          echo "$RUNNER_TEMP/nb-studio/bin" >> "$GITHUB_PATH"
+          printf %s "$NB_STUDIO_API_KEY" | NB_STUDIO_KEYCHAIN=off "$RUNNER_TEMP/nb-studio/bin/nb-studio" login --server "$NB_STUDIO_URL" --api-key-stdin
+      - run: nb-studio build status --app "$APP_ID" --state building --logs "$LOGS"
+      # The pull request's own App: Studio records the pull request as its source and removes it once it goes.
+      # Studio first decides whether the head gets a preview: not when an issue linked to the pull request needs no
+      # preview environment, the pull request is labeled no-preview, or no runtime paths changed. Then the job passes without deploying.
+      - id: ensure
+        run: |
+          NB_UNCHANGED="$(node -e 'const { execFileSync } = require("node:child_process"); if (!process.env.NB_BASE_SHA) throw new Error("Missing pull request base commit"); const files = execFileSync("git", ["diff", "--no-relative", "--no-renames", "--name-only", "-z", process.env.NB_BASE_SHA + "..." + (process.env.NB_HEAD_SHA || "HEAD")], { encoding: "utf8" }).split("\0").filter(Boolean); const directory = "."; const shared = ["pnpm-lock.yaml","pnpm-workspace.yaml","package.json"]; const runtime = files.some(file => {   if (shared.includes(file)) return true;   if (directory !== "." && !file.startsWith(directory + "/")) return false;   const relative = directory === "." ? file : file.slice(directory.length + 1);   return !/^(docs|tests|e2e|\.github|\.gitlab|\.workflow)\//i.test(relative) && !/\.md$/i.test(relative) && !/^\.gitlab-ci\.ya?ml$/i.test(relative); }); process.stdout.write(runtime ? "" : "--unchanged");')"
+          nb-studio app ensure "$APP_ID" --environment "$ENVIRONMENT" --can-skip $NB_UNCHANGED ${{ contains(github.event.pull_request.labels.*.name, 'no-preview') && '--labeled-no-preview' || '' }} --json > "$RUNNER_TEMP/nb-studio-ensure.json"
+          echo "skip=$(node -e 'const answer = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).result; console.error(answer.meta?.message ?? ""); process.stdout.write(answer.data.previewSkipped ?? "")' "$RUNNER_TEMP/nb-studio-ensure.json")" >> "$GITHUB_OUTPUT"
+      - if: ${{ !(steps.ensure.outputs.skip != '') }}
+        run: pnpm install --frozen-lockfile
+      # Leaves storage/exports/dist.tar.gz: dist/ and config.example.yml.
+      - if: ${{ !(steps.ensure.outputs.skip != '') }}
+        run: pnpm build --target linux-x64 --tar
+      # Uploads the archive and deploys it; a protected environment asks its approvers instead.
+      - if: ${{ !(steps.ensure.outputs.skip != '') }}
+        run: nb-studio deploy --app "$APP_ID" --file storage/exports/dist.tar.gz
+      - if: failure()
+        run: nb-studio build status --app "$APP_ID" --state failed --logs "$LOGS"
