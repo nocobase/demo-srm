@@ -527,3 +527,187 @@ test('category rules block incomplete submission and submitted rules remain froz
   expect(approved.submissions[0].requirements[0].checkValidity).toBe(false);
   expect(approved.status).toBe('approved');
 });
+
+test('testing and inspection suppliers use their own category rules', async ({
+  testApp,
+  connection,
+}) => {
+  const rulesFor = (category: string) =>
+    connection.query
+      .selectFrom('supplierAdmissionRules')
+      .selectAll()
+      .where('category', '=', category)
+      .execute();
+  const seeded = await rulesFor('testing');
+  expect(seeded).toHaveLength(1);
+  expect(seeded[0]).toMatchObject({ typeCode: 'business-license' });
+  expect(Boolean(seeded[0]!.required)).toBe(true);
+  expect(Boolean(seeded[0]!.checkValidity)).toBe(true);
+  const { default: seed } =
+    await import('../../database/main/seeds/202611100001_supplier_testing_category.js');
+  await seed.run({ query: connection.query } as never);
+  await seed.run({ query: connection.query } as never);
+  expect((await rulesFor('testing')).map((rule) => rule.id)).toEqual([
+    seeded[0]!.id,
+  ]);
+
+  const admin = await signIn(testApp, DEFAULT_ADMIN_CREDENTIALS);
+  const password = 'Supplier-test-123!';
+  expect(
+    (
+      await admin.fetch(
+        '/users',
+        body({
+          name: 'Testing applicant',
+          username: 'testingapplicant',
+          email: 'testing@example.test',
+          password,
+          roleScopes: { app: [] },
+        }),
+      )
+    ).status,
+  ).toBe(201);
+  const owner = await signIn(testApp, {
+    username: 'testingapplicant',
+    password,
+  });
+  const created = await admin.fetch(
+    '/supplierQualificationTypes',
+    body({
+      code: 'test-accreditation',
+      name: 'Test accreditation',
+      category: 'testing',
+      required: true,
+      enabled: true,
+    }),
+  );
+  expect(created.status).toBeLessThan(300);
+  const serviceBefore = await rulesFor('service');
+  expect(
+    (
+      await admin.fetch(
+        '/supplierAdmissionRules/testing',
+        body(
+          [
+            {
+              typeCode: 'business-license',
+              required: true,
+              checkValidity: false,
+              enabled: true,
+            },
+            {
+              typeCode: 'test-accreditation',
+              required: true,
+              checkValidity: true,
+              enabled: true,
+            },
+          ],
+          'PUT',
+        ),
+      )
+    ).status,
+  ).toBe(200);
+  expect(await rulesFor('service')).toEqual(serviceBefore);
+
+  const saveProfile = (category: string) =>
+    owner.fetch(
+      '/suppliers/me',
+      body(
+        {
+          name: 'Testing Lab Supplier',
+          creditCode: '91310000TESTINGLAB01',
+          category,
+          contactName: 'Contact',
+          contactPhone: '123456789',
+          contactEmail: 'testing@example.test',
+        },
+        'PUT',
+      ),
+    );
+  const profile = await saveProfile('testing');
+  expect(profile.status).toBe(200);
+  const supplierId = (await profile.json()).data.id as string;
+  const checklist = (
+    await (await owner.fetch('/suppliers/me/checklist?category=testing')).json()
+  ).data as { typeCode: string; checkValidity: boolean; status: string }[];
+  expect(
+    checklist
+      .map(({ typeCode, checkValidity, status }) => ({
+        typeCode,
+        checkValidity,
+        status,
+      }))
+      .sort((left, right) => left.typeCode.localeCompare(right.typeCode)),
+  ).toEqual([
+    { typeCode: 'business-license', checkValidity: false, status: 'missing' },
+    { typeCode: 'test-accreditation', checkValidity: true, status: 'missing' },
+  ]);
+  const uploadFile = async (name: string) => {
+    const form = new FormData();
+    form.append(
+      'file',
+      new File([name], `${name}.txt`, { type: 'text/plain' }),
+    );
+    const upload = await owner.fetch('/supplierFiles/uploadOne', {
+      method: 'POST',
+      headers: { origin: 'http://localhost' },
+      body: form,
+    });
+    expect(upload.status).toBe(201);
+    const data = (await upload.json()).data as {
+      id?: string;
+      record?: { id: string };
+    };
+    return (data.record?.id ?? data.id)!;
+  };
+  const licenseId = await uploadFile('license');
+  const accreditationId = await uploadFile('accreditation');
+  const save = (accreditation?: { validUntil: string | null }) =>
+    owner.fetch(
+      '/suppliers/me/qualifications',
+      body(
+        [
+          { typeCode: 'business-license', fileId: licenseId, validUntil: null },
+          ...(accreditation
+            ? [
+                {
+                  typeCode: 'test-accreditation',
+                  fileId: accreditationId,
+                  ...accreditation,
+                },
+              ]
+            : []),
+        ],
+        'PUT',
+      ),
+    );
+  const rejected = async (reason: string) => {
+    const response = await owner.fetch('/suppliers/me/submit', emptyPost());
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.reason).toBe(reason);
+    const current = await connection
+      .repository('suppliers')
+      .findOne({ filter: { id: supplierId } });
+    expect(current?.status).toBe('draft');
+  };
+  expect((await save()).status).toBe(200);
+  await rejected('MISSING:test-accreditation');
+  expect((await save({ validUntil: null })).status).toBe(200);
+  await rejected('DATEMISSING:test-accreditation');
+  expect((await save({ validUntil: dateFromNow(-1) })).status).toBe(200);
+  await rejected('EXPIRED:test-accreditation');
+
+  // Switching category re-evaluates against the new category's rules.
+  expect((await save({ validUntil: dateFromNow(200) })).status).toBe(200);
+  expect((await saveProfile('service')).status).toBe(200);
+  await rejected('INVALID_QUALIFICATION_TYPE');
+  expect((await saveProfile('testing')).status).toBe(200);
+
+  const submitted = await owner.fetch('/suppliers/me/submit', emptyPost());
+  expect(submitted.status).toBe(200);
+  expect((await submitted.json()).data.status).toBe('pending');
+  const snapshot = await connection
+    .repository('supplierSubmissionSnapshots')
+    .findOne({ filter: { supplierId } });
+  expect(snapshot?.category).toBe('testing');
+});

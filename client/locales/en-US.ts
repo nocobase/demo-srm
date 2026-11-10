@@ -47,6 +47,32 @@ const enUS = {
       dateMissing: 'Expiration date missing',
       notProvided: 'Not provided (optional)',
       legacyBaseline: 'Migration baseline; original rules unavailable',
+      expirationRequired: 'Expiration date required and checked',
+      noExpirationCheck: 'Expiration not checked',
+      empty: 'No requirements are configured for this category.',
+    },
+    blocked: {
+      title: 'Fix these items before submitting:',
+      missing: '{{name}}: the required file has not been uploaded.',
+      dateMissing: '{{name}}: enter the expiration date.',
+      expired:
+        '{{name}}: the certificate expired on {{date}}. Upload a valid one.',
+      expiredUnknown:
+        '{{name}}: the certificate has expired. Upload a valid one.',
+      notApplicable:
+        '{{name}}: not used for this category. Remove it and save the qualifications.',
+      duplicate: '{{name}}: listed more than once. Keep one and save.',
+      unsavedCategory:
+        'Save the company profile to apply the new category before submitting.',
+      unsavedQualifications: 'Save the qualifications before submitting.',
+      checklistLoading:
+        'Loading the requirements for this category. Submitting is available once they are checked.',
+      checklistFailed:
+        'The requirements for this category could not be loaded. Reload the page and try again.',
+      noRequirements:
+        'This category has no required qualifications configured. Contact the administrator.',
+      notApplicableRow:
+        'Not used for the selected category. Remove this qualification.',
     },
     my: {
       title: 'My supplier application',
@@ -140,6 +166,7 @@ const enUS = {
       equipment: 'Electrical equipment',
       service: 'Technical services',
       both: 'Equipment and services',
+      testing: 'Testing and inspection services',
     },
     status: {
       draft: 'Draft',

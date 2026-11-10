@@ -5,10 +5,19 @@ import { databaseManagerToken, type DatabaseConnection } from '@nocobase/db';
 import type { ServiceContainer } from '@nocobase/service-provider';
 import { buildFilter } from '@nocobase/repository-input';
 
+/** Supplier categories; each one owns an independent set of admission rules. */
+export const supplierCategories = [
+  'equipment',
+  'service',
+  'both',
+  'testing',
+] as const;
+export type SupplierCategory = (typeof supplierCategories)[number];
+
 export interface SupplierProfileInput {
   name: string;
   creditCode: string;
-  category: 'equipment' | 'service' | 'both';
+  category: SupplierCategory;
   contactName: string;
   contactPhone: string;
   contactEmail: string;

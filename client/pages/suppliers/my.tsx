@@ -1,4 +1,5 @@
 import {
+  ApiClientError,
   createUuid,
   useApiClient,
   useService,
@@ -22,18 +23,21 @@ import { Card, CardContent, CardHeader, CardTitle } from '#components/ui/card';
 import { Input } from '#components/ui/input';
 import { Textarea } from '#components/ui/textarea';
 import { useListData } from '#hooks/use-list-data';
-import type {
-  SupplierMyResponse,
-  SupplierResponse,
-  SupplierFile,
-  QualificationType,
-  AdmissionResult,
+import {
+  supplierCategories,
+  type SupplierCategory,
+  type SupplierMyResponse,
+  type SupplierResponse,
+  type SupplierFile,
+  type QualificationType,
+  type AdmissionResult,
+  type Qualification,
 } from './model.js';
 
 const initial: {
   name: string;
   creditCode: string;
-  category: 'equipment' | 'service' | 'both';
+  category: SupplierCategory;
   contactName: string;
   contactPhone: string;
   contactEmail: string;
@@ -56,6 +60,28 @@ type Draft = {
   validUntil: string;
   file: SupplierFile | null;
 };
+/** The saved fields of a qualification row, used to detect edits that have not been saved yet. */
+const qualificationKey = (rows: readonly Draft[]) =>
+  JSON.stringify(
+    rows
+      .filter((row) => row.file)
+      .map((row) => [
+        row.typeCode,
+        row.certificateNumber,
+        row.validUntil,
+        row.file?.id,
+      ]),
+  );
+const toDraft = (q: Qualification): Draft => ({
+  clientId: q.id,
+  typeCode: q.typeCode,
+  certificateNumber: q.certificateNumber ?? '',
+  validUntil: q.validUntil ?? '',
+  file: q.file,
+});
+/** Submit rejections whose reason is `<STATUS>:<typeCode>`, mapped to their checklist status. */
+const rejectedStatuses: Record<string, 'missing' | 'dateMissing' | 'expired'> =
+  { MISSING: 'missing', DATEMISSING: 'dateMissing', EXPIRED: 'expired' };
 const emptyDraft = (): Draft => ({
   clientId: createUuid(),
   typeCode: 'business-license',
@@ -102,13 +128,7 @@ export default function MySupplierPage(): ReactElement {
       (q) => q.stage === 'proposed',
     );
     const updatedDrafts = proposed.length
-      ? proposed.map((q) => ({
-          clientId: q.id,
-          typeCode: q.typeCode,
-          certificateNumber: q.certificateNumber ?? '',
-          validUntil: q.validUntil ?? '',
-          file: q.file,
-        }))
+      ? proposed.map(toDraft)
       : [emptyDraft()];
     queueMicrotask(() => {
       setProfile(updatedProfile);
@@ -121,10 +141,11 @@ export default function MySupplierPage(): ReactElement {
   const canEditQualifications = editable || canRenew;
   const setField = (key: keyof typeof initial, value: string) =>
     setProfile((old) => ({ ...old, [key]: value }));
-  const typeName = (code: string) =>
+  const itemName = (code: string, fallback?: string) =>
     code === 'business-license'
       ? t('suppliers.qualificationTypes.businessLicense')
-      : (types.find((type) => type.code === code)?.name ?? code);
+      : (types.find((type) => type.code === code)?.name ?? fallback ?? code);
+  const typeName = (code: string) => itemName(code);
   const applicableRules = rules.filter(
     (rule) => rule.enabled && rule.category === profile.category,
   );
@@ -151,6 +172,88 @@ export default function MySupplierPage(): ReactElement {
       return { ...item, status: 'expired' as const };
     return { ...item, status: 'complete' as const };
   });
+  const savedQualifications = useMemo(
+    () =>
+      qualificationKey(
+        supplier?.qualifications
+          .filter((q) => q.stage === 'proposed')
+          .map(toDraft) ?? [],
+      ),
+    [supplier],
+  );
+  const notApplicable = (row: Draft) =>
+    Boolean(row.file) &&
+    !applicableRules.some((rule) => rule.typeCode === row.typeCode);
+  // Mirrors the server's submit check on the materials shown here, so the applicant sees every reason at once.
+  // The submit route stays authoritative and its rejection is explained below as well.
+  const blockers: string[] = [];
+  // The checklist is fetched per selected category; until it has loaded for that category the materials
+  // cannot be judged, so submitting stays blocked. An unsaved category change is reported on its own.
+  const checklistReady =
+    !checklist.loading && !checklist.error && Boolean(checklist.data);
+  if (canEditQualifications && supplier) {
+    if (supplier.category !== profile.category)
+      blockers.push(t('suppliers.blocked.unsavedCategory'));
+    if (checklist.loading)
+      blockers.push(t('suppliers.blocked.checklistLoading'));
+    else if (!checklistReady)
+      blockers.push(t('suppliers.blocked.checklistFailed'));
+  }
+  if (canEditQualifications && supplier && checklistReady) {
+    for (const item of visibleChecklist ?? []) {
+      const name = itemName(item.typeCode, item.name);
+      if (item.status === 'missing')
+        blockers.push(t('suppliers.blocked.missing', { name }));
+      else if (item.status === 'dateMissing')
+        blockers.push(t('suppliers.blocked.dateMissing', { name }));
+      else if (item.status === 'expired') {
+        const date = drafts.find(
+          (row) => row.typeCode === item.typeCode && row.file,
+        )?.validUntil;
+        blockers.push(
+          t('suppliers.blocked.expired', { name, date: date ?? '' }),
+        );
+      }
+    }
+    const seen = new Set<string>();
+    for (const row of drafts.filter((draft) => draft.file)) {
+      if (notApplicable(row))
+        blockers.push(
+          t('suppliers.blocked.notApplicable', {
+            name: typeName(row.typeCode),
+          }),
+        );
+      else if (seen.has(row.typeCode))
+        blockers.push(
+          t('suppliers.blocked.duplicate', { name: typeName(row.typeCode) }),
+        );
+      seen.add(row.typeCode);
+    }
+    if (!(visibleChecklist ?? []).some((item) => item.required))
+      blockers.push(t('suppliers.blocked.noRequirements'));
+    if (!blockers.length && qualificationKey(drafts) !== savedQualifications)
+      blockers.push(t('suppliers.blocked.unsavedQualifications'));
+  }
+  const rejection = (error: unknown) => {
+    const reason = error instanceof ApiClientError ? (error.reason ?? '') : '';
+    const [code = '', typeCode = ''] = reason.split(':');
+    const name = typeName(typeCode);
+    const status = rejectedStatuses[code];
+    if (status === 'expired')
+      return t('suppliers.blocked.expiredUnknown', { name });
+    if (status) return t(`suppliers.blocked.${status}`, { name });
+    if (reason === 'INVALID_QUALIFICATION_TYPE')
+      return t('suppliers.blocked.notApplicable', {
+        name: t('suppliers.qualifications.title'),
+      });
+    if (reason === 'DUPLICATE_QUALIFICATION_TYPE')
+      return t('suppliers.blocked.duplicate', {
+        name: t('suppliers.qualifications.title'),
+      });
+    if (reason === 'NO_REQUIRED_QUALIFICATIONS')
+      return t('suppliers.blocked.noRequirements');
+    return t('suppliers.submitFailed');
+  };
   const saveProfile = async () => {
     setMessage('');
     try {
@@ -225,9 +328,9 @@ export default function MySupplierPage(): ReactElement {
       );
       request.reload();
       setMessage(t('suppliers.submitted'));
-    } catch {
+    } catch (error) {
       checklist.reload();
-      setMessage(t('suppliers.submitFailed'));
+      setMessage(rejection(error));
     }
   };
   return (
@@ -288,15 +391,11 @@ export default function MySupplierPage(): ReactElement {
                     value={profile.category}
                     onChange={(e) => setField('category', e.target.value)}
                   >
-                    <option value='equipment'>
-                      {t('suppliers.categories.equipment')}
-                    </option>
-                    <option value='service'>
-                      {t('suppliers.categories.service')}
-                    </option>
-                    <option value='both'>
-                      {t('suppliers.categories.both')}
-                    </option>
+                    {supplierCategories.map((value) => (
+                      <option key={value} value={value}>
+                        {t(`suppliers.categories.${value}`)}
+                      </option>
+                    ))}
                   </select>
                 </label>
               </div>
@@ -327,23 +426,24 @@ export default function MySupplierPage(): ReactElement {
                 <p>{t('suppliers.loading')}</p>
               ) : checklist.error ? (
                 <p role='alert'>{t('suppliers.loadFailed')}</p>
+              ) : !visibleChecklist?.length ? (
+                <p>{t('suppliers.checklist.empty')}</p>
               ) : (
-                visibleChecklist?.map((item) => (
+                visibleChecklist.map((item) => (
                   <div
                     key={item.typeCode}
                     className='flex flex-wrap justify-between gap-2 rounded-md border border-border p-3'
                   >
                     <span>
-                      {item.typeCode === 'business-license'
-                        ? t('suppliers.qualificationTypes.businessLicense')
-                        : item.name}
+                      {itemName(item.typeCode, item.name)}
                       {' · '}
                       {item.required
                         ? t('suppliers.settings.required')
                         : t('suppliers.checklist.optional')}
+                      {' · '}
                       {item.checkValidity
-                        ? ` · ${t('suppliers.settings.checkValidity')}`
-                        : ''}
+                        ? t('suppliers.checklist.expirationRequired')
+                        : t('suppliers.checklist.noExpirationCheck')}
                     </span>
                     <span>{t(`suppliers.checklist.${item.status}`)}</span>
                   </div>
@@ -407,6 +507,11 @@ export default function MySupplierPage(): ReactElement {
                                 )
                               }
                             >
+                              {notApplicable(row) && (
+                                <option value={row.typeCode} disabled>
+                                  {typeName(row.typeCode)}
+                                </option>
+                              )}
                               {applicableTypes.map(
                                 (type: QualificationType) => (
                                   <option key={type.code} value={type.code}>
@@ -458,6 +563,11 @@ export default function MySupplierPage(): ReactElement {
                             />
                           </label>
                         </div>
+                        {notApplicable(row) && (
+                          <p role='alert' className='text-sm text-destructive'>
+                            {t('suppliers.blocked.notApplicableRow')}
+                          </p>
+                        )}
                         <FileUploadField
                           repository={files}
                           value={row.file ? [row.file as FileRecord] : []}
@@ -490,6 +600,21 @@ export default function MySupplierPage(): ReactElement {
                         </Button>
                       </div>
                     ))}
+                    {blockers.length > 0 && (
+                      <div
+                        role='alert'
+                        className='space-y-1 rounded-md border border-destructive/50 p-3 text-sm text-destructive'
+                      >
+                        <p className='font-medium'>
+                          {t('suppliers.blocked.title')}
+                        </p>
+                        <ul className='list-disc space-y-1 pl-5'>
+                          {blockers.map((blocker) => (
+                            <li key={blocker}>{blocker}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                     <div className='flex flex-wrap gap-2'>
                       <Button
                         variant='outline'
@@ -510,7 +635,11 @@ export default function MySupplierPage(): ReactElement {
                       </Button>
                       <Button
                         onClick={() => void submit()}
-                        disabled={submitSubmission.submitting || busyUpload}
+                        disabled={
+                          submitSubmission.submitting ||
+                          busyUpload ||
+                          blockers.length > 0
+                        }
                       >
                         {canRenew
                           ? t('suppliers.submitRenewal')
