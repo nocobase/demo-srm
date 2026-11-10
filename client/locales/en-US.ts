@@ -65,6 +65,10 @@ const enUS = {
       unsavedCategory:
         'Save the company profile to apply the new category before submitting.',
       unsavedQualifications: 'Save the qualifications before submitting.',
+      checklistLoading:
+        'Loading the requirements for this category. Submitting is available once they are checked.',
+      checklistFailed:
+        'The requirements for this category could not be loaded. Reload the page and try again.',
       noRequirements:
         'This category has no required qualifications configured. Contact the administrator.',
       notApplicableRow:

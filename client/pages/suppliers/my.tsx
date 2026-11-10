@@ -187,9 +187,19 @@ export default function MySupplierPage(): ReactElement {
   // Mirrors the server's submit check on the materials shown here, so the applicant sees every reason at once.
   // The submit route stays authoritative and its rejection is explained below as well.
   const blockers: string[] = [];
-  if (canEditQualifications && supplier && checklist.data) {
+  // The checklist is fetched per selected category; until it has loaded for that category the materials
+  // cannot be judged, so submitting stays blocked. An unsaved category change is reported on its own.
+  const checklistReady =
+    !checklist.loading && !checklist.error && Boolean(checklist.data);
+  if (canEditQualifications && supplier) {
     if (supplier.category !== profile.category)
       blockers.push(t('suppliers.blocked.unsavedCategory'));
+    if (checklist.loading)
+      blockers.push(t('suppliers.blocked.checklistLoading'));
+    else if (!checklistReady)
+      blockers.push(t('suppliers.blocked.checklistFailed'));
+  }
+  if (canEditQualifications && supplier && checklistReady) {
     for (const item of visibleChecklist ?? []) {
       const name = itemName(item.typeCode, item.name);
       if (item.status === 'missing')

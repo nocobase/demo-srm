@@ -56,6 +56,8 @@ const zhCN: AppResource = {
       duplicate: '{{name}}：重复填写，请只保留一条并保存。',
       unsavedCategory: '类别已变更，请先保存基本信息再提交。',
       unsavedQualifications: '请先保存资质再提交。',
+      checklistLoading: '正在加载该类别的资质要求，校验完成后才能提交。',
+      checklistFailed: '该类别的资质要求加载失败，请刷新页面后重试。',
       noRequirements: '该类别未配置必传资质，请联系管理员。',
       notApplicableRow: '当前类别不需要此资质，请移除。',
     },
