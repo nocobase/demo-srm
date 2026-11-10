@@ -5,6 +5,14 @@ export type SupplierStatus =
   | 'approved'
   | 'renewalPending'
   | 'renewalReturned';
+/** Supplier categories; each one owns an independent set of admission rules. */
+export const supplierCategories = [
+  'equipment',
+  'service',
+  'both',
+  'testing',
+] as const;
+export type SupplierCategory = (typeof supplierCategories)[number];
 export interface SupplierFile {
   id: string;
   filename: string;
@@ -40,7 +48,7 @@ export interface Supplier {
   canReview?: boolean;
   name: string;
   creditCode: string;
-  category: 'equipment' | 'service' | 'both';
+  category: SupplierCategory;
   contactName: string;
   contactPhone: string;
   contactEmail: string;
@@ -97,7 +105,7 @@ export interface ReviewBrief {
 }
 export interface AdmissionRule {
   id?: string;
-  category: 'equipment' | 'service' | 'both';
+  category: SupplierCategory;
   typeCode: string;
   name: string;
   required: boolean;

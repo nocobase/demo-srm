@@ -17,7 +17,11 @@ import {
 } from '#components/ui/table';
 import { useListData } from '#hooks/use-list-data';
 import { SettingsModulePage } from '../settings/settings-module-page.js';
-import type { AdmissionRule, QualificationType } from './model.js';
+import {
+  supplierCategories,
+  type AdmissionRule,
+  type QualificationType,
+} from './model.js';
 
 interface Settings {
   reviewerId: string;
@@ -233,7 +237,7 @@ export default function SupplierSettingsPage(): ReactElement {
                   setDraftRules(undefined);
                 }}
               >
-                {(['equipment', 'service', 'both'] as const).map((value) => (
+                {supplierCategories.map((value) => (
                   <option key={value} value={value}>
                     {t(`suppliers.categories.${value}`)}
                   </option>

@@ -26,13 +26,15 @@ import { z } from 'zod';
 import {
   SupplierService,
   isValidCalendarDate,
+  supplierCategories,
 } from '../providers/supplier-service.js';
 import { supplierProcessDescription } from '../providers/supplier-process.js';
 
+const category = z.enum(supplierCategories);
 const profile = z.object({
   name: z.string().trim().min(2).max(200),
   creditCode: z.string().trim().min(8).max(32),
-  category: z.enum(['equipment', 'service', 'both']),
+  category,
   contactName: z.string().trim().min(1).max(100),
   contactPhone: z.string().trim().min(3).max(50),
   contactEmail: z.email().max(255),
@@ -67,11 +69,10 @@ const settingsInput = z.object({
 const typeInput = z.object({
   code: z.string().regex(/^[a-z][a-z0-9-]{1,63}$/),
   name: z.string().trim().min(1).max(150),
-  category: z.enum(['all', 'equipment', 'service', 'both']),
+  category: z.enum(['all', ...supplierCategories]),
   required: z.boolean(),
   enabled: z.boolean(),
 });
-const category = z.enum(['equipment', 'service', 'both']);
 const rulesInput = z
   .array(
     z.object({
