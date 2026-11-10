@@ -1,6 +1,6 @@
 # Supplier admission
 
-`supplierQualificationTypes` is the material catalog. `supplierAdmissionRules` is the active category policy; equipment, service and both are independent categories. A rule has one type code, required flag, validity-check flag and enabled flag. Every category must retain an enabled required rule.
+`supplierQualificationTypes` is the material catalog. `supplierAdmissionRules` is the active category policy; equipment, service, both and testing (testing and inspection services) are independent categories; their values live in `supplierCategories` (server `supplier-service.ts`, client `model.ts`). The applicant page lists every reason that blocks submit and disables it, and explains a submit rejection from its `<STATUS>:<typeCode>` reason. A rule has one type code, required flag, validity-check flag and enabled flag. Every category must retain an enabled required rule.
 
 `supplierSubmissionSnapshots` stores one immutable policy and check result per successful submit, including resubmissions and renewals. Approval checks current proposed files and dates against the latest submission snapshot, never against live rules. A return followed by another submit uses the rules active at that new submission. Pre-feature pending records have a `migration-baseline` snapshot; it is not their original policy.
 
